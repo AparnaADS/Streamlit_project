@@ -54,9 +54,10 @@ def fetch_balance_sheet_4cols(as_of_date: str) -> pd.DataFrame:
     resp = requests.get(
         f"{API_BASE}/reports/balancesheet",
         headers={"Authorization": f"Zoho-oauthtoken {get_access_token()}"},
-        params={"organization_id": ORG_ID, "date": as_of_date}
+        params={"organization_id": ORG_ID, "to_date": as_of_date}
     )
     resp.raise_for_status()
+    st.write(resp.json())
     sheet = resp.json().get("balance_sheet", [])
 
     # recurse and classify
@@ -90,33 +91,60 @@ def fetch_balance_sheet_4cols(as_of_date: str) -> pd.DataFrame:
 
     return pd.DataFrame(records)
 
+
+
+
+def pnl(from_date: str, to_date: str) -> pd.DataFrame:
+    """
+    Returns a DataFrame with columns:
+      - Account
+      - First Total   (leaf nodes)
+      - Sub Total     (grouping nodes except top-level)
+      - Grand Total   (top-level sheet sections)
+    """
+    # fetch raw sheet
+    resp = requests.get(
+        f"{API_BASE}/reports/profitandloss",
+        headers={"Authorization": f"Zoho-oauthtoken {get_access_token()}"},
+        params={"organization_id": ORG_ID, "from_date": from_date, "to_date": to_date}
+    )
+    resp.raise_for_status()
+    st.write(resp.json())
+
+
+
+
 # ——————— Streamlit App ———————
 def main():
     st.set_page_config(page_title="Balance Sheet", layout="wide")
     st.title("Balance Sheet – 4 Columns")
 
     # Date input from user for selecting date
-    selected_date = st.date_input("Select Date for Balance Sheet", datetime.today())
-    as_of = selected_date.strftime("%Y-%m-%d")
+    from_date_picker = st.date_input("Select Date for Balance Sheet", datetime.today(),key="from_date_picker")
+    # as_of = selected_date.strftime("%Y-%m-%d")
+    from_date = from_date_picker.strftime("%Y-%m-%d")
+    to_date_picker = st.date_input("Select Date for Balance Sheet", datetime.today(),key="to_date_picker")
+    to_date = to_date_picker.strftime("%Y-%m-%d")
 
     # Fetch the balance sheet for the selected date
-    balance_sheet = fetch_balance_sheet_4cols(as_of)
+    # balance_sheet = fetch_balance_sheet_4cols(as_of)
+    pnl(from_date, to_date)
 
-    # Displaying the balance sheet in a readable format
-    if not balance_sheet.empty:
-        st.subheader(f"Balance Sheet as of {as_of}")
-        st.dataframe(
-            balance_sheet,
-            column_config={
-                "Account":     st.column_config.TextColumn("Account"),
-                "First Total": st.column_config.NumberColumn("First Total"),
-                "Sub Total":   st.column_config.NumberColumn("Sub Total"),
-                "Grand Total": st.column_config.NumberColumn("Grand Total"),
-            },
-            use_container_width=True
-        )
-    else:
-        st.error(f"Unable to fetch balance sheet for {as_of}. Please try again.")
+    # # Displaying the balance sheet in a readable format
+    # if not balance_sheet.empty:
+    #     st.subheader(f"Balance Sheet as of {as_of}")
+    #     st.dataframe(
+    #         balance_sheet,
+    #         column_config={
+    #             "Account":     st.column_config.TextColumn("Account"),
+    #             "First Total": st.column_config.NumberColumn("First Total"),
+    #             "Sub Total":   st.column_config.NumberColumn("Sub Total"),
+    #             "Grand Total": st.column_config.NumberColumn("Grand Total"),
+    #         },
+    #         use_container_width=True
+    #     )
+    # else:
+    #     st.error(f"Unable to fetch balance sheet for {as_of}. Please try again.")
 
 if __name__ == "__main__":
     main()
