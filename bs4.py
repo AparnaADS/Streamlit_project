@@ -11,86 +11,84 @@ load_dotenv()
 CLIENT_ID = os.getenv("ZOHO_CLIENT_ID")
 CLIENT_SECRET = os.getenv("ZOHO_CLIENT_SECRET")
 REFRESH_TOKEN = os.getenv("ZOHO_REFRESH_TOKEN")
-ORG_ID = os.getenv("ZOHO_ORG_ID")  # Fetch Organization ID from .env
 TOKEN_URL = os.getenv("ZOHO_TOKEN_URL", "https://accounts.zoho.com/oauth/v2/token")
+ORG_ID = os.getenv("ZOHO_ORG_ID")  # Fetch Organization ID from .env
 API_BASE = "https://www.zohoapis.com/books/v3"  # Correct API base URL
 
-_token_cache = {"token": None, "expires": 0}
+_token_cache = {"access_token": os.getenv("ZOHO_ACCESS_TOKEN"), "expires_at": 0}
+
+def _refresh_access_token():
+    resp = requests.post(
+        TOKEN_URL,
+        data={
+            "refresh_token": REFRESH_TOKEN,
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "grant_type": "refresh_token",
+        }
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    token = data["access_token"]
+    expires_in = data.get("expires_in", 3600)
+    _token_cache.update({
+        "access_token": token,
+        "expires_at": time.time() + expires_in - 60
+    })
+    return token
 
 def get_access_token():
-    if not _token_cache["token"] or time.time() >= _token_cache["expires"]:
-        # Refresh token request
-        r = requests.post(
-            TOKEN_URL,
-            data={
-                "refresh_token": REFRESH_TOKEN,
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type": "refresh_token",
+    if not _token_cache.get("access_token") or time.time() >= _token_cache["expires_at"]:
+        return _refresh_access_token()
+    return _token_cache["access_token"]
+
+def fetch_balance_sheet_4cols(as_of_date: str) -> pd.DataFrame:
+    """
+    Returns a DataFrame with columns:
+      - Account
+      - First Total   (leaf nodes)
+      - Sub Total     (grouping nodes except top-level)
+      - Grand Total   (top-level sheet sections)
+    """
+    # fetch raw sheet
+    resp = requests.get(
+        f"{API_BASE}/reports/balancesheet",
+        headers={"Authorization": f"Zoho-oauthtoken {get_access_token()}"},
+        params={"organization_id": ORG_ID, "date": as_of_date}
+    )
+    resp.raise_for_status()
+    sheet = resp.json().get("balance_sheet", [])
+
+    # recurse and classify
+    records = []
+    def recurse(node: dict, depth: int):
+        name     = node.get("name") or node.get("total_label")
+        total    = float(node.get("total", 0))
+        children = node.get("account_transactions", [])
+
+        if name:
+            row = {
+                "Account":     name,
+                "First Total": None,
+                "Sub Total":   None,
+                "Grand Total": None
             }
-        )
-        r.raise_for_status()  # Check if the request was successful
-        j = r.json()
-        _token_cache["token"] = j["access_token"]
-        _token_cache["expires"] = time.time() + j.get("expires_in", 3600) - 60
-    return _token_cache["token"]
+            if depth == 0:
+                row["Grand Total"] = total
+            elif children:
+                row["Sub Total"] = total
+            else:
+                row["First Total"] = total
+            records.append(row)
 
-def fetch_data_from_zoho(endpoint, params):
-    url = f"{API_BASE}/{endpoint}"
-    headers = {"Authorization": f"Zoho-oauthtoken {get_access_token()}"}
-    
-    response = requests.get(url, headers=headers, params=params)
-    
-    # Check if response is successful
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Error: {response.status_code}, {response.text}")
-        return {}
+        for child in children:
+            recurse(child, depth + 1)
 
-def calculate_balance_sheet(start_date, end_date=None):
-    # If no end_date is provided, set it to start_date
-    if not end_date:
-        end_date = start_date  # Or datetime.today().strftime('%Y-%m-%d') for today's date
-    
-    # Define parameters for transactions (fetch data for the specified date range)
-    params = {
-        "organization_id": ORG_ID,
-        "date_start": start_date,
-        "date_end": end_date,
-    }
+    # kick off each top‑level section
+    for section in sheet:
+        recurse(section, 0)
 
-    # Fetch sales data (Invoices)
-    invoices_data = fetch_data_from_zoho("invoices", params)
-    total_sales = sum([invoice["total"] for invoice in invoices_data.get("invoices", [])])
-
-    # Fetch expense data (Bills) for Liabilities (Accounts Payable)
-    bills_data = fetch_data_from_zoho("bills", params)
-    total_expenses = sum([bill["total"] for bill in bills_data.get("bills", [])])
-
-    # Fetch payment data (Payments)
-    customer_payments = fetch_data_from_zoho("customerpayments", params)
-    total_customer_payments = sum([payment["amount"] for payment in customer_payments.get("customerpayments", [])])
-
-    vendor_payments = fetch_data_from_zoho("vendorpayments", params)
-    total_vendor_payments = sum([payment["amount"] for payment in vendor_payments.get("vendorpayments", [])])
-
-    # Calculate Liabilities (Accounts Payable)
-    liabilities = total_expenses - total_vendor_payments  # Using bills and vendor payments
-
-    # Calculate balance sheet values
-    assets = total_sales + total_customer_payments  # Example refinement: Add sales and customer payments for assets
-    equity = assets - liabilities  # Adjust as needed
-
-    return {
-        "Assets": assets,
-        "Liabilities": liabilities,
-        "Equity": equity,
-        "Total Sales": total_sales,
-        "Total Expenses": total_expenses,
-        "Customer Payments": total_customer_payments,
-        "Vendor Payments": total_vendor_payments
-    }
+    return pd.DataFrame(records)
 
 # ——————— Streamlit App ———————
 def main():
@@ -102,27 +100,21 @@ def main():
     as_of = selected_date.strftime("%Y-%m-%d")
 
     # Fetch the balance sheet for the selected date
-    balance_sheet = calculate_balance_sheet(as_of)
+    balance_sheet = fetch_balance_sheet_4cols(as_of)
 
     # Displaying the balance sheet in a readable format
-    if balance_sheet:
+    if not balance_sheet.empty:
         st.subheader(f"Balance Sheet as of {as_of}")
-        
-        # Creating the balance sheet table with the proper columns
-        data = [
-            {"Account": "Assets", "First Total": balance_sheet['Assets'], "Sub Total": None, "Grand Total": balance_sheet['Assets']},
-            {"Account": "Liabilities", "First Total": balance_sheet['Liabilities'], "Sub Total": None, "Grand Total": balance_sheet['Liabilities']},
-            {"Account": "Equity", "First Total": balance_sheet['Equity'], "Sub Total": None, "Grand Total": balance_sheet['Equity']},
-            {"Account": "Total Sales", "First Total": balance_sheet['Total Sales'], "Sub Total": None, "Grand Total": balance_sheet['Total Sales']},
-            {"Account": "Total Expenses", "First Total": balance_sheet['Total Expenses'], "Sub Total": None, "Grand Total": balance_sheet['Total Expenses']},
-            {"Account": "Customer Payments", "First Total": balance_sheet['Customer Payments'], "Sub Total": None, "Grand Total": balance_sheet['Customer Payments']},
-            {"Account": "Vendor Payments", "First Total": balance_sheet['Vendor Payments'], "Sub Total": None, "Grand Total": balance_sheet['Vendor Payments']},
-        ]
-
-        # Create a DataFrame
-        df = pd.DataFrame(data)
-
-        st.dataframe(df)
+        st.dataframe(
+            balance_sheet,
+            column_config={
+                "Account":     st.column_config.TextColumn("Account"),
+                "First Total": st.column_config.NumberColumn("First Total"),
+                "Sub Total":   st.column_config.NumberColumn("Sub Total"),
+                "Grand Total": st.column_config.NumberColumn("Grand Total"),
+            },
+            use_container_width=True
+        )
     else:
         st.error(f"Unable to fetch balance sheet for {as_of}. Please try again.")
 
