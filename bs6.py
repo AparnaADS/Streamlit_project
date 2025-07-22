@@ -1,125 +1,136 @@
-import os
-import time
-import requests
+import os, time, requests
 import pandas as pd
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta  # pip install python-dateutil
 from dotenv import load_dotenv
 
-# ——————— Load environment variables ———————
+# ---------- ENV & AUTH ----------
 load_dotenv()
-CLIENT_ID = os.getenv("ZOHO_CLIENT_ID")
+CLIENT_ID     = os.getenv("ZOHO_CLIENT_ID")
 CLIENT_SECRET = os.getenv("ZOHO_CLIENT_SECRET")
 REFRESH_TOKEN = os.getenv("ZOHO_REFRESH_TOKEN")
-TOKEN_URL = os.getenv("ZOHO_TOKEN_URL", "https://accounts.zoho.com/oauth/v2/token")
-ORG_ID = os.getenv("ZOHO_ORG_ID")  # Fetch Organization ID from .env
-API_BASE = "https://www.zohoapis.com/books/v3"  # Correct API base URL
+TOKEN_URL     = os.getenv("ZOHO_TOKEN_URL", "https://accounts.zoho.com/oauth/v2/token")
+ORG_ID        = os.getenv("ZOHO_ORG_ID")
+API_BASE      = "https://www.zohoapis.com/books/v3"
 
-_token_cache = {"access_token": os.getenv("ZOHO_ACCESS_TOKEN"), "expires_at": 0}
+_token_cache = {"access_token": None, "expires_at": 0}
 
 def _refresh_access_token():
-    resp = requests.post(
+    r = requests.post(
         TOKEN_URL,
         data={
             "refresh_token": REFRESH_TOKEN,
-            "client_id": CLIENT_ID,
+            "client_id":     CLIENT_ID,
             "client_secret": CLIENT_SECRET,
-            "grant_type": "refresh_token",
-        }
+            "grant_type":    "refresh_token",
+        },
+        timeout=30
     )
-    resp.raise_for_status()
-    data = resp.json()
-    token = data["access_token"]
-    expires_in = data.get("expires_in", 3600)
-    _token_cache.update({
-        "access_token": token,
-        "expires_at": time.time() + expires_in - 60
-    })
-    return token
+    r.raise_for_status()
+    j = r.json()
+    _token_cache["access_token"] = j["access_token"]
+    _token_cache["expires_at"]   = time.time() + j.get("expires_in", 3600) - 60
+    return _token_cache["access_token"]
 
 def get_access_token():
-    if not _token_cache.get("access_token") or time.time() >= _token_cache["expires_at"]:
+    if not _token_cache["access_token"] or time.time() >= _token_cache["expires_at"]:
         return _refresh_access_token()
     return _token_cache["access_token"]
 
-def fetch_balance_sheet_4cols(as_of_date: str, compare_period: str = None) -> pd.DataFrame:
-    """
-    Fetches Balance Sheet and includes comparison if needed.
-    """
-    params = {
-        "organization_id": ORG_ID,
-        "date": as_of_date,
-    }
-    if compare_period:
-        params["compare_period"] = compare_period  # Add the compare period if selected
-    
+# ---------- API CALL ----------
+def call_bs(date_str: str) -> dict:
     resp = requests.get(
         f"{API_BASE}/reports/balancesheet",
         headers={"Authorization": f"Zoho-oauthtoken {get_access_token()}"},
-        params=params
+        params={"organization_id": ORG_ID, "date": date_str},
+        timeout=60
     )
     resp.raise_for_status()
-    sheet = resp.json().get("balance_sheet", [])
-    records = []
-    def recurse(node: dict, depth: int):
+    return resp.json()
+
+# ---------- FLATTEN ----------
+def flatten_bs(json_obj: dict) -> pd.DataFrame:
+    sheet = json_obj.get("balance_sheet", [])
+    rows = []
+
+    def rec(node, depth):
         name = node.get("name") or node.get("total_label")
-        total = float(node.get("total", 0))
-        children = node.get("account_transactions", [])
+        total = float(node.get("total", 0) or 0)
+        children = node.get("account_transactions", []) or []
+
         if name:
-            row = {
+            rows.append({
                 "Account": name,
-                "First Total": None,
-                "Sub Total": None,
-                "Grand Total": None
-            }
-            if depth == 0:
-                row["Grand Total"] = total
-            elif children:
-                row["Sub Total"] = total
-            else:
-                row["First Total"] = total
-            records.append(row)
-        for child in children:
-            recurse(child, depth + 1)
+                "Depth": depth,
+                "Total": total,
+                "IsGroup": bool(children)
+            })
+        for ch in children:
+            rec(ch, depth + 1)
 
-    # Process top-level sections of the balance sheet
-    for section in sheet:
-        recurse(section, 0)
+    for sec in sheet:
+        rec(sec, 0)
 
-    return pd.DataFrame(records)
+    return pd.DataFrame(rows)
 
-# ——————— Streamlit App ———————
-def main():
-    st.set_page_config(page_title="Balance Sheet Comparison", layout="wide")
-    st.title("Balance Sheet – Compare Periods")
+# ---------- PERIOD HELPERS ----------
+def period_shift(end_dt: datetime, freq: str, n: int) -> datetime:
+    """Return end date n periods before based on freq."""
+    if freq == "Weekly":
+        return end_dt - relativedelta(weeks=n)
+    if freq == "Monthly":
+        return end_dt - relativedelta(months=n)
+    if freq == "Quarterly":
+        return end_dt - relativedelta(months=3*n)
+    if freq == "Yearly":
+        return end_dt - relativedelta(years=n)
+    return end_dt
 
-    # Date input for selecting the date range
-    selected_date = st.date_input("Select Date for Balance Sheet", datetime.today(), key="selected_date")
-    as_of = selected_date.strftime("%Y-%m-%d")
+# ---------- STREAMLIT ----------
+st.set_page_config(layout="wide")
+st.title("Balance Sheet – Comparison")
 
-    # Add comparison options
-    compare_options = ["None", "Previous Period", "Previous Month", "Previous Quarter", "Previous Year"]
-    comparison = st.selectbox("Compare With", compare_options, index=0)
+end_date = st.date_input("End Date", datetime.today())
+end_str  = end_date.strftime("%Y-%m-%d")
 
-    if comparison == "Previous Period":
-        compare_period = "PreviousPeriod"
-    elif comparison == "Previous Month":
-        compare_period = "PreviousMonth"
-    elif comparison == "Previous Quarter":
-        compare_period = "PreviousQuarter"
-    elif comparison == "Previous Year":
-        compare_period = "PreviousYear"
-    else:
-        compare_period = None
+freq = st.selectbox("Frequency", ["None", "Weekly", "Monthly", "Quarterly", "Yearly"])
+num_periods = st.selectbox("Number of Periods", [1,2,3,4])
 
-    # Fetch and display Balance Sheet with or without comparison
-    balance_sheet_df = fetch_balance_sheet_4cols(as_of, compare_period)
-    
-    if not balance_sheet_df.empty:
-        st.subheader(f"Balance Sheet as of {as_of}")
-        st.dataframe(balance_sheet_df, use_container_width=True)
-    else:
-        st.error(f"No Balance Sheet data available for the given date: {as_of}")
+indent_rows = st.checkbox("Indent hierarchy", True)
 
-if __name__ == "__main__":
-    main()
+# Fetch current period
+with st.spinner("Fetching current period..."):
+    current_json = call_bs(end_str)
+    current_df   = flatten_bs(current_json)
+    if indent_rows:
+        current_df["Account"] = current_df.apply(lambda r: "    "*r["Depth"] + r["Account"], axis=1)
+    current_df = current_df.drop(columns=["Depth","IsGroup"])
+    current_df = current_df.rename(columns={"Total":"Current"})
+
+# Fetch previous periods (manual)
+all_df = current_df.copy()
+if freq != "None":
+    for i in range(1, num_periods+1):
+        prev_end = period_shift(end_date, freq, i)
+        prev_str = prev_end.strftime("%Y-%m-%d")
+        with st.spinner(f"Fetching period {i}: {prev_str}"):
+            js = call_bs(prev_str)
+            df_prev = flatten_bs(js)
+            if indent_rows:
+                df_prev["Account"] = df_prev.apply(lambda r: "    "*r["Depth"] + r["Account"], axis=1)
+            df_prev = df_prev.drop(columns=["Depth","IsGroup"])
+            colname = f"Prev_{i} ({prev_str})"
+            df_prev = df_prev.rename(columns={"Total": colname})
+            all_df = all_df.merge(df_prev, on="Account", how="outer")
+
+# Order columns: Account first
+cols = ["Account"] + [c for c in all_df.columns if c != "Account"]
+all_df = all_df[cols]
+
+st.subheader("Balance Sheet")
+st.dataframe(all_df, use_container_width=True)
+
+# Download
+csv = all_df.to_csv(index=False).encode("utf-8")
+st.download_button("Download CSV", csv, file_name=f"bs_compare_{end_str}.csv", mime="text/csv")

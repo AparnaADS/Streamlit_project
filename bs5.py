@@ -3,7 +3,7 @@ import time
 import requests
 import pandas as pd
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
 
 # ——————— Load environment variables ———————
@@ -42,135 +42,121 @@ def get_access_token():
         return _refresh_access_token()
     return _token_cache["access_token"]
 
-def fetch_data_from_zoho(endpoint, params):
-    url = f"{API_BASE}/{endpoint}"
-    headers = {"Authorization": f"Zoho-oauthtoken {get_access_token()}"}
-    
-    response = requests.get(url, headers=headers, params=params)
+# Fetch Balance Sheet data
+def fetch_balance_sheet_4cols(as_of_date: str) -> pd.DataFrame:
+    """
+    Returns a DataFrame with columns:
+      - Account
+      - First Total   (leaf nodes)
+      - Sub Total     (grouping nodes except top-level)
+      - Grand Total   (top-level sheet sections)
+    """
+    # fetch raw sheet
+    resp = requests.get(
+        f"{API_BASE}/reports/balancesheet",
+        headers={"Authorization": f"Zoho-oauthtoken {get_access_token()}"},
+        params={"organization_id": ORG_ID, "date": as_of_date}
+    )
+    resp.raise_for_status()
+    sheet = resp.json().get("balance_sheet", [])
 
-    # Check if response is successful
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Error: {response.status_code}, {response.text}")
-        return {}
+    # recurse and classify
+    records = []
+    def recurse(node: dict, depth: int):
+        name     = node.get("name") or node.get("total_label")
+        total    = float(node.get("total", 0))
+        children = node.get("account_transactions", [])
 
-def fetch_balance_sheet_4cols(start_date, end_date=None):
-    # If no end_date is provided, set it to start_date
-    if not end_date:
-        end_date = start_date  # Or datetime.today().strftime('%Y-%m-%d') for today's date
-    
-    # Define parameters for transactions (fetch data for the specified date range)
-    params = {
-        "organization_id": ORG_ID,
-        "date_start": start_date,
-        "date_end": end_date,
-    }
+        if name:
+            row = {
+                "Account":     name,
+                "First Total": None,
+                "Sub Total":   None,
+                "Grand Total": None
+            }
+            if depth == 0:
+                row["Grand Total"] = total
+            elif children:
+                row["Sub Total"] = total
+            else:
+                row["First Total"] = total
+            records.append(row)
 
-    # Fetch sales data (Invoices)
-    invoices_data = fetch_data_from_zoho("invoices", params)
-    total_sales = sum([invoice["total"] for invoice in invoices_data.get("invoices", [])])
+        for child in children:
+            recurse(child, depth + 1)
 
-    # Fetch expense data (Bills) for Liabilities (Accounts Payable)
-    bills_data = fetch_data_from_zoho("bills", params)
-    total_expenses = sum([bill["total"] for bill in bills_data.get("bills", [])])
+    # kick off each top‑level section
+    for section in sheet:
+        recurse(section, 0)
 
-    # Fetch payment data (Payments)
-    customer_payments = fetch_data_from_zoho("customerpayments", params)
-    total_customer_payments = sum([payment["amount"] for payment in customer_payments.get("customerpayments", [])])
+    return pd.DataFrame(records)
 
-    vendor_payments = fetch_data_from_zoho("vendorpayments", params)
-    total_vendor_payments = sum([payment["amount"] for payment in vendor_payments.get("vendorpayments", [])])
+# Fetch Profit and Loss data
+def fetch_profit_and_loss(from_date: str, to_date: str) -> pd.DataFrame:
+    """
+    Fetches the profit and loss data for the specified date range and formats it into a DataFrame.
+    """
+    resp = requests.get(
+        f"{API_BASE}/reports/profitandloss",
+        headers={"Authorization": f"Zoho-oauthtoken {get_access_token()}"},
+        params={"organization_id": ORG_ID, "from_date": from_date, "to_date": to_date}
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
-    # Calculate Liabilities (Accounts Payable)
-    liabilities = total_expenses - total_vendor_payments  # Using bills and vendor payments
-
-    # Calculate balance sheet values
-    assets = total_sales + total_customer_payments  # Example refinement: Add sales and customer payments for assets
-    equity = assets - liabilities  # Adjust as needed
-
-    return {
-        "Assets": assets,
-        "Liabilities": liabilities,
-        "Equity": equity,
-        "Total Sales": total_sales,
-        "Total Expenses": total_expenses,
-        "Customer Payments": total_customer_payments,
-        "Vendor Payments": total_vendor_payments
-    }
-
-def calculate_dates_based_on_filter(selected_filter):
-    today = datetime.today()
-
-    if selected_filter == "Today":
-        start_date = today.strftime("%Y-%m-%d")
-        end_date = today.strftime("%Y-%m-%d")
-    elif selected_filter == "This Week":
-        start_date = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
-        end_date = (today + timedelta(days=6 - today.weekday())).strftime("%Y-%m-%d")
-    elif selected_filter == "This Month":
-        start_date = today.replace(day=1).strftime("%Y-%m-%d")
-        end_date = today.replace(day=28).strftime("%Y-%m-%d")  # Approximate end of the month
-    elif selected_filter == "This Quarter":
-        month = today.month
-        if month in [1, 2, 3]:
-            start_date = today.replace(month=1, day=1).strftime("%Y-%m-%d")
-            end_date = today.replace(month=3, day=31).strftime("%Y-%m-%d")
-        elif month in [4, 5, 6]:
-            start_date = today.replace(month=4, day=1).strftime("%Y-%m-%d")
-            end_date = today.replace(month=6, day=30).strftime("%Y-%m-%d")
-        elif month in [7, 8, 9]:
-            start_date = today.replace(month=7, day=1).strftime("%Y-%m-%d")
-            end_date = today.replace(month=9, day=30).strftime("%Y-%m-%d")
-        else:
-            start_date = today.replace(month=10, day=1).strftime("%Y-%m-%d")
-            end_date = today.replace(month=12, day=31).strftime("%Y-%m-%d")
-    elif selected_filter == "This Year":
-        start_date = today.replace(month=1, day=1).strftime("%Y-%m-%d")
-        end_date = today.replace(month=12, day=31).strftime("%Y-%m-%d")
-    elif selected_filter == "Yesterday":
-        start_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-        end_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-    elif selected_filter == "Previous Week":
-        start_date = (today - timedelta(weeks=1) - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
-        end_date = (today - timedelta(weeks=1) + timedelta(days=6 - today.weekday())).strftime("%Y-%m-%d")
-    elif selected_filter == "Previous Month":
-        start_date = (today.replace(month=today.month - 1, day=1) if today.month != 1 else today.replace(year=today.year - 1, month=12, day=1)).strftime("%Y-%m-%d")
-        end_date = (today.replace(month=today.month, day=1) - timedelta(days=1)).strftime("%Y-%m-%d")
-    elif selected_filter == "Previous Year":
-        start_date = today.replace(year=today.year - 1, month=1, day=1).strftime("%Y-%m-%d")
-        end_date = today.replace(year=today.year - 1, month=12, day=31).strftime("%Y-%m-%d")
-    else:  # Custom range
-        start_date = st.date_input("Start Date").strftime("%Y-%m-%d")
-        end_date = st.date_input("End Date").strftime("%Y-%m-%d")
-
-    return start_date, end_date
+    records = []
+    for section in data.get("profit_and_loss", []):
+        account = section.get("name")
+        first_total = section.get("total", 0)
+        # Iterate through account transactions (nested)
+        for sub_account in section.get("account_transactions", []):
+            records.append({
+                "Account": sub_account.get("name"),
+                "First Total": sub_account.get("total", 0),
+                "Sub Total": None,
+                "Grand Total": None
+            })
+        
+        records.append({
+            "Account": account,
+            "First Total": first_total,
+            "Sub Total": None,
+            "Grand Total": None
+        })
+        
+    return pd.DataFrame(records)
 
 # ——————— Streamlit App ———————
 def main():
-    st.set_page_config(page_title="Balance Sheet", layout="wide")
-    st.title("Balance Sheet – 4 Columns")
+    st.set_page_config(page_title="Balance Sheet and Profit & Loss", layout="wide")
+    st.title("Balance Sheet and Profit & Loss Reports")
 
-    # Dropdown for selecting date filter
-    selected_filter = st.selectbox(
-        "Select a Date Range:",
-        ["Today", "This Week", "This Month", "This Quarter", "This Year", "Yesterday", "Previous Week", "Previous Month", "Previous Quarter", "Previous Year", "Custom"]
-    )
+    # Date input for selecting the date range for P&L report
+    from_date_picker = st.date_input("Select Start Date for P&L", datetime.today(), key="from_date_picker")
+    from_date = from_date_picker.strftime("%Y-%m-%d")
+    to_date_picker = st.date_input("Select End Date for P&L", datetime.today(), key="to_date_picker")
+    to_date = to_date_picker.strftime("%Y-%m-%d")
 
-    # Get the corresponding start and end date
-    start_date, end_date = calculate_dates_based_on_filter(selected_filter)
+    # Fetch Balance Sheet data
+    balance_sheet_df = fetch_balance_sheet_4cols(from_date)
 
-    # Fetch the balance sheet for the selected date range
-    balance_sheet = fetch_balance_sheet_4cols(start_date, end_date)
-
-    # Displaying the balance sheet in a readable format
-    if balance_sheet.empty:
-        st.error(f"Unable to fetch balance sheet for {start_date} to {end_date}. Please try again.")
+    # Display the Balance Sheet data first
+    if not balance_sheet_df.empty:
+        st.subheader(f"Balance Sheet as of {from_date}")
+        st.dataframe(balance_sheet_df, use_container_width=True)
     else:
-        st.subheader(f"Balance Sheet from {start_date} to {end_date}")
+        st.error(f"No Balance Sheet data available for the given date: {from_date}")
 
-        # Creating the balance sheet table with the proper columns
-        st.dataframe(balance_sheet)
+    # Fetch Profit and Loss data
+    pnl_df = fetch_profit_and_loss(from_date, to_date)
+
+    # Display the P&L data
+    if not pnl_df.empty:
+        st.subheader(f"P&L Report from {from_date} to {to_date}")
+        st.dataframe(pnl_df, use_container_width=True)
+    else:
+        st.error(f"No data available for the given date range: {from_date} to {to_date}")
+    
 
 if __name__ == "__main__":
     main()
