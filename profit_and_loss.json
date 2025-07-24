@@ -1,0 +1,142 @@
+{
+    "code": 0,
+    "message": "success",
+    "profit_and_loss": [
+        {
+            "total": -3400,
+            "previous_values": [],
+            "account_transactions": [
+                {
+                    "total": 0,
+                    "total_label": "Total Operating Income",
+                    "previous_values": [],
+                    "account_transactions": [],
+                    "name": "Operating Income",
+                    "previous_total": []
+                },
+                {
+                    "total": 3400,
+                    "total_label": "Total Cost of Goods Sold",
+                    "previous_values": [],
+                    "account_transactions": [
+                        {
+                            "total_sub_account": 0,
+                            "total": 3400,
+                            "account_id": "6554101000000093113",
+                            "depth": 0,
+                            "previous_values": [],
+                            "is_child_present": false,
+                            "name": "Job Costing",
+                            "previous_total_sub_account": [],
+                            "account_code": "",
+                            "is_collapsed_view": false,
+                            "previous_total": []
+                        }
+                    ],
+                    "name": "Cost of Goods Sold",
+                    "previous_total": []
+                }
+            ],
+            "name": "Gross Profit",
+            "previous_total": []
+        },
+        {
+            "total": -92458.81,
+            "previous_values": [],
+            "account_transactions": [
+                {
+                    "total": 89058.81,
+                    "total_label": "Total Operating Expense",
+                    "previous_values": [],
+                    "account_transactions": [
+                        {
+                            "total_sub_account": 0,
+                            "total": 89058.81,
+                            "account_id": "6554101000000035005",
+                            "depth": 0,
+                            "previous_values": [],
+                            "is_child_present": false,
+                            "name": "Uncategorized",
+                            "previous_total_sub_account": [],
+                            "account_code": "",
+                            "is_collapsed_view": false,
+                            "previous_total": []
+                        }
+                    ],
+                    "name": "Operating Expense",
+                    "previous_total": []
+                }
+            ],
+            "name": "Operating Profit",
+            "previous_total": []
+        },
+        {
+            "total": -92458.81,
+            "previous_values": [],
+            "account_transactions": [
+                {
+                    "total": 0,
+                    "total_label": "Total Non Operating Income",
+                    "previous_values": [],
+                    "account_transactions": [],
+                    "name": "Non Operating Income",
+                    "previous_total": []
+                },
+                {
+                    "total": 0,
+                    "total_label": "Total Non Operating Expense",
+                    "previous_values": [],
+                    "account_transactions": [],
+                    "name": "Non Operating Expense",
+                    "previous_total": []
+                }
+            ],
+            "name": "Net Profit/Loss",
+            "previous_total": []
+        }
+    ],
+    "page_context": {
+        "can_show_reports_banner": false,
+        "can_schedule": true,
+        "is_inv_txn_job_in_progress": false,
+        "report_basis": "Accrual",
+        "is_already_scheduled": false,
+        "report_type": "profit_and_loss",
+        "applied_filter": "TransactionDate.ThisMonth",
+        "from_date": "2025-07-01",
+        "to_date": "2025-07-31",
+        "previous_date_range": [],
+        "show_rows": "non_zero",
+        "last_accessed_time_formatted": "19/07/2025 12:34 PM",
+        "select_columns": [
+            {
+                "field": "name",
+                "group": "report"
+            },
+            {
+                "field": "total",
+                "group": "report"
+            }
+        ],
+        "group_by": [
+            {
+                "field": "none",
+                "group": "report"
+            }
+        ],
+        "date_range_label": "",
+        "fifo_scheduler_status": {
+            "is_queue_entry_present": false,
+            "is_job_status_completed": true
+        },
+        "date_range_list": [
+            {
+                "date_range_label": "01 Jul 2025 - 31 Jul 2025",
+                "from_date": "2025-07-01",
+                "to_date": "2025-07-31"
+            }
+        ],
+        "sort_column": "account_name",
+        "sort_order": "A"
+    }
+}
