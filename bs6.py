@@ -1,9 +1,16 @@
+<<<<<<< HEAD
 import os
 import time
 import requests
 import pandas as pd
 import streamlit as st
 from datetime import datetime
+=======
+import os, time, requests
+import pandas as pd
+import streamlit as st
+from datetime import datetime, timedelta
+>>>>>>> 00751ce23ad4f78e05d5255eac8d31ec1958d0b4
 from dateutil.relativedelta import relativedelta  # pip install python-dateutil
 from dotenv import load_dotenv
 
@@ -42,7 +49,10 @@ def get_access_token():
 
 # ---------- API CALL ----------
 def call_bs(date_str: str) -> dict:
+<<<<<<< HEAD
     print(f"Fetching Balance Sheet for: {date_str}")  # Debug: print the date for which we are fetching the data
+=======
+>>>>>>> 00751ce23ad4f78e05d5255eac8d31ec1958d0b4
     resp = requests.get(
         f"{API_BASE}/reports/balancesheet",
         headers={"Authorization": f"Zoho-oauthtoken {get_access_token()}"},
@@ -106,7 +116,10 @@ indent_rows = st.checkbox("Indent hierarchy", True)
 with st.spinner("Fetching current period..."):
     current_json = call_bs(end_str)
     current_df   = flatten_bs(current_json)
+<<<<<<< HEAD
     print(f"Current Period Data: {current_df.head()}")  # Debug: print the first few rows of the current period
+=======
+>>>>>>> 00751ce23ad4f78e05d5255eac8d31ec1958d0b4
     if indent_rows:
         current_df["Account"] = current_df.apply(lambda r: "    "*r["Depth"] + r["Account"], axis=1)
     current_df = current_df.drop(columns=["Depth","IsGroup"])
@@ -121,7 +134,10 @@ if freq != "None":
         with st.spinner(f"Fetching period {i}: {prev_str}"):
             js = call_bs(prev_str)
             df_prev = flatten_bs(js)
+<<<<<<< HEAD
             print(f"Previous Period {i} Data: {df_prev.head()}")  # Debug: print the first few rows of the previous period data
+=======
+>>>>>>> 00751ce23ad4f78e05d5255eac8d31ec1958d0b4
             if indent_rows:
                 df_prev["Account"] = df_prev.apply(lambda r: "    "*r["Depth"] + r["Account"], axis=1)
             df_prev = df_prev.drop(columns=["Depth","IsGroup"])
